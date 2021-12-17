@@ -40,6 +40,37 @@ func (a *App) configureLogging() {
 func (a *App) Run() {
 	a.logger.Info("Starting application")
 
+	a.configureSqs()
+	pollingChannels := make(chan *awssqs.Message, 2)
+	go a.pollMessages(pollingChannels)
+
+	//Global message handler
+	go func() {
+		for message := range pollingChannels {
+			a.logger.WithFields(log.Fields{
+				"MessageId": aws.StringValue(message.MessageId),
+				"Body":      aws.StringValue(message.Body),
+			}).Info("Received message")
+
+			//Check result, move to separate channel that retries forever
+			a.sqs.DeleteMessage(&awssqs.DeleteMessageInput{
+				QueueUrl:      aws.String("http://localstack:4566/000000000000/local-queue"),
+				ReceiptHandle: message.ReceiptHandle,
+			})
+		}
+	}()
+
+	//Global message publisher
+	go func() {
+		for {
+			a.sqs.SendMessage(&awssqs.SendMessageInput{
+				MessageBody: aws.String("Hello"),
+				QueueUrl:    aws.String("http://localstack:4566/000000000000/local-queue"),
+			})
+			time.Sleep(time.Second * 5)
+		}
+	}()
+
 	//Use a more sophiscated router like chi or something
 	http.HandleFunc("/_system/health", func(rw http.ResponseWriter, r *http.Request) {
 		rw.WriteHeader(http.StatusOK)
@@ -90,31 +121,6 @@ func (a *App) pollMessages(chn chan<- *awssqs.Message) {
 
 func main() {
 	app := Initialise()
-
-	app.configureSqs()
-	pollingChannels := make(chan *awssqs.Message, 2)
-	go app.pollMessages(pollingChannels)
-
-	//Global message handler
-	go func() {
-		for message := range pollingChannels {
-			app.logger.WithFields(log.Fields{
-				"MessageId": aws.StringValue(message.MessageId),
-				"Body":      aws.StringValue(message.Body),
-			}).Info("Received message")
-		}
-	}()
-
-	//Global message publisher
-	go func() {
-		for {
-			app.sqs.SendMessage(&awssqs.SendMessageInput{
-				MessageBody: aws.String("Hello"),
-				QueueUrl:    aws.String("http://localstack:4566/000000000000/local-queue"),
-			})
-			time.Sleep(time.Second * 5)
-		}
-	}()
 
 	app.Run()
 }
