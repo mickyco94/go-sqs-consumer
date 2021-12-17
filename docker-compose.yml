@@ -4,9 +4,23 @@ services:
     go-sqs-consumer:
         image: go-sqs-consumer
         container_name: go-sqs-consumer
+        restart: always
         build:
             context: .
         environment:
             - FOO=BAR
         ports:
             - "8080:8080"
+
+    localstack:
+        container_name: go-sqs-consumer-localstack
+        build:
+            context: ./docker-setup/localstack
+            dockerfile: Dockerfile
+        environment:
+            - SERVICES=sqs
+            - DEFAULT_REGION=eu-west-1
+            - DEBUG=0
+            - DATA_DIR=/tmp/localstack/data
+        ports:
+            - "4566:4566" # edge router
