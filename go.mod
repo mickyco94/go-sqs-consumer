@@ -1,4 +1,4 @@
-module github.com/micky-clerkinoliver-cko/go-sqs-consumer.git
+module github.com/micky-clerkinoliver-cko/go-sqs-consumer
 
 go 1.17
 
