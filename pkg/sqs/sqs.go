@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -42,8 +43,7 @@ type queue struct {
 	url                 string
 	deadLetterQueueUrl  string
 	sqs                 *SqsConsumer
-	handlerRegistration map[string]HandlerFunc
-	middlewares         []func(Handler) Handler
+	handlerRegistration map[string]Handler
 	incomingChannel     chan *awssqs.Message
 	deleteChannel       chan *string
 	retryChannel        chan *awssqs.Message
@@ -109,16 +109,15 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 		middlewares: make([]func(Handler) Handler, 0),
 	}
 
-	// chained := make(map[string]HandlerFunc)
-	// for k, v := range cfg.handlers {
-	// 	chained[k] = Chain(cfg.middlewares...).Handler(v).
-	// }
+	chained := map[string]Handler{}
+	for k, v := range cfg.handlers {
+		chained[k] = Chain(cfg.middlewares...).Handler(v)
+	}
 
 	queueCfg(cfg)
 	queue := queue{
 		name:                queueName,
-		handlerRegistration: cfg.handlers,
-		middlewares:         cfg.middlewares,
+		handlerRegistration: chained,
 		incomingChannel:     make(chan *awssqs.Message, cfg.channelSize),
 		deleteChannel:       make(chan *string),
 		retryChannel:        make(chan *awssqs.Message),
@@ -216,11 +215,10 @@ func (q *queue) handleInternal(message *awssqs.Message) {
 	handler := q.handlerRegistration[messageType]
 
 	if handler == nil {
+		fmt.Println("Couldn't find a handler")
 		q.deleteMessage(message.ReceiptHandle)
 		return
 	}
-
-	h := Chain(q.middlewares...).Handler(handler)
 
 	ctx := &HandlerContext{
 		MessageId:   aws.StringValue(message.MessageId),
@@ -228,7 +226,7 @@ func (q *queue) handleInternal(message *awssqs.Message) {
 		Context:     context.TODO(),
 	}
 
-	result := h.Handle(ctx, aws.StringValue(message.Body))
+	result := handler.Handle(ctx, aws.StringValue(message.Body))
 
 	switch result {
 	case Handled:
