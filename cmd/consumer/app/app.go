@@ -28,6 +28,7 @@ func New() *App {
 	sqsConsumer := sqs.NewConsumer()
 
 	sqsConsumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
+		c.WithDeadLetterQueue("local-queue-dl")
 		c.WithChannelSize(100)
 		c.WithHandler("test", testMessageHandler.Handle)
 	})
@@ -67,7 +68,13 @@ func (a *App) Run() {
 		rw.Write([]byte("Healthy"))
 	})
 
-	a.sqsConsumer.Run()
+	errs := a.sqsConsumer.Run()
+
+	go func() {
+		for err := range errs {
+			a.logger.WithError(err).Error("Error in sqs-consumers")
+		}
+	}()
 
 	a.logger.Fatal(http.ListenAndServe(":8080", r)) //Move port to config
 }

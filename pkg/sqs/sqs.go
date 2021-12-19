@@ -12,14 +12,15 @@ import (
 type HandlerFunc func(ctx *HandlerContext, rawMsg string) HandlerResult
 
 type SqsConsumer struct {
-	queues  []Queue
+	queues  []queue
 	sqs     *awssqs.SQS
 	errChan chan error
 }
 
 type QueueConfiguration struct {
-	channelSize int
-	handlers    map[string]HandlerFunc
+	channelSize     int
+	handlers        map[string]HandlerFunc
+	deadLetterQueue string
 }
 
 type HandlerContext struct {
@@ -46,7 +47,7 @@ func NewConsumer() *SqsConsumer {
 	s := &SqsConsumer{
 		sqs:     awssqs.New(sess),
 		errChan: make(chan error),
-		queues:  make([]Queue, 0),
+		queues:  make([]queue, 0),
 	}
 
 	return s
@@ -57,7 +58,7 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 		handlers: map[string]HandlerFunc{},
 	}
 	queueCfg(cfg)
-	queue := Queue{
+	queue := queue{
 		name:                queueName,
 		handlerRegistration: cfg.handlers,
 		incomingChannel:     make(chan *awssqs.Message, cfg.channelSize),
@@ -78,6 +79,11 @@ func (cfg *QueueConfiguration) WithHandler(messageType string, handler HandlerFu
 	return cfg
 }
 
+func (cfg *QueueConfiguration) WithDeadLetterQueue(queueName string) *QueueConfiguration {
+	cfg.deadLetterQueue = queueName
+	return cfg
+}
+
 func (s *SqsConsumer) Run() chan error {
 
 	for _, q := range s.queues {
@@ -87,29 +93,43 @@ func (s *SqsConsumer) Run() chan error {
 	return s.errChan
 }
 
-func (q *Queue) setQueueUrl() error {
-	res, err := q.sqs.sqs.GetQueueUrl(&awssqs.GetQueueUrlInput{
-		QueueName: &q.name,
+func (s *SqsConsumer) getQueueUrl(queueName string) (string, error) {
+	res, err := s.sqs.GetQueueUrl(&awssqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
 	})
 
 	if err != nil {
-		return err
+		return "", nil
 	}
 
-	q.url = aws.StringValue(res.QueueUrl)
-
-	return nil
+	return aws.StringValue(res.QueueUrl), nil
 }
 
-func (q *Queue) deleteMessage(receiptHandle *string) {
+func (q *queue) deleteMessage(receiptHandle *string) {
 	q.sqs.sqs.DeleteMessage(&awssqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.url),
 		ReceiptHandle: receiptHandle,
 	})
 }
 
-func (q *Queue) listenForMessages() {
-	err := q.setQueueUrl()
+func (q *queue) listenForMessages() {
+	queueUrl, err := q.sqs.getQueueUrl(q.deadLetterQueueName)
+
+	if err != nil {
+		q.sqs.errChan <- err
+		return
+	} else {
+		q.deadLetterQueueUrl = queueUrl
+	}
+
+	queueUrl, err = q.sqs.getQueueUrl(q.name)
+
+	if err != nil {
+		q.sqs.errChan <- err
+		return
+	} else {
+		q.url = queueUrl
+	}
 
 	if err != nil {
 		q.sqs.errChan <- err
@@ -123,7 +143,7 @@ func (q *Queue) listenForMessages() {
 	go q.pollMessages(q.incomingChannel)
 }
 
-func (q *Queue) handleInternal(message *awssqs.Message) {
+func (q *queue) handleInternal(message *awssqs.Message) {
 
 	messageTypeAttribute := message.MessageAttributes["MessageType"]
 
@@ -153,16 +173,24 @@ func (q *Queue) handleInternal(message *awssqs.Message) {
 	case Handled:
 		q.deleteMessage(message.ReceiptHandle)
 	case DeadLetter:
-
+		q.deadLetterMessage(message)
 	}
-
 }
 
-func (q *Queue) deadLetterMessage() {
-	//Need to define a dlq in config
+func (q *queue) deadLetterMessage(msg *awssqs.Message) {
+	_, err := q.sqs.sqs.SendMessage(&awssqs.SendMessageInput{
+		MessageBody:       msg.Body,
+		MessageAttributes: msg.MessageAttributes,
+		QueueUrl:          &q.deadLetterQueueUrl,
+	})
+
+	if err != nil {
+		q.sqs.errChan <- err
+		return
+	}
 }
 
-func (q *Queue) pollMessages(chn chan<- *awssqs.Message) {
+func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
 
 	for {
 
@@ -186,11 +214,13 @@ func (q *Queue) pollMessages(chn chan<- *awssqs.Message) {
 	}
 }
 
-type Queue struct {
+type queue struct {
 	name                string
-	handlerRegistration map[string]HandlerFunc
+	deadLetterQueueName string
 	url                 string
+	deadLetterQueueUrl  string
 	sqs                 *SqsConsumer
+	handlerRegistration map[string]HandlerFunc
 	incomingChannel     chan *awssqs.Message
 	deleteChannel       chan *string
 	retryChannel        chan *awssqs.Message
