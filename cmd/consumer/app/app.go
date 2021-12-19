@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/internal/handlers"
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
+	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/pipeline"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -28,6 +29,7 @@ func New() *App {
 	sqsConsumer := sqs.NewConsumer()
 
 	sqsConsumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
+		c.Use(pipeline.Logger(logger))
 		c.WithDeadLetterQueue("local-queue-dl")
 		c.WithChannelSize(100)
 		c.WithHandler("test", testMessageHandler.Handle)
@@ -58,6 +60,14 @@ func (a *App) Run() {
 
 	r := chi.NewRouter()
 
+	r.Use(func(h http.Handler) http.Handler {
+		fn := func(w http.ResponseWriter, r *http.Request) {
+
+			h.ServeHTTP(w, r)
+		}
+
+		return http.HandlerFunc(fn)
+	})
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)

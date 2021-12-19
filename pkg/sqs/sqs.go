@@ -27,6 +27,15 @@ import (
 
 type HandlerFunc func(ctx *HandlerContext, rawMsg string) HandlerResult
 
+// ServeHTTP calls f(w, r).
+func (f HandlerFunc) Handle(ctx *HandlerContext, r string) HandlerResult {
+	return f(ctx, r)
+}
+
+type Handler interface {
+	Handle(*HandlerContext, string) HandlerResult
+}
+
 type queue struct {
 	name                string
 	deadLetterQueueName string
@@ -34,6 +43,7 @@ type queue struct {
 	deadLetterQueueUrl  string
 	sqs                 *SqsConsumer
 	handlerRegistration map[string]HandlerFunc
+	middlewares         []func(Handler) Handler
 	incomingChannel     chan *awssqs.Message
 	deleteChannel       chan *string
 	retryChannel        chan *awssqs.Message
@@ -60,6 +70,7 @@ type QueueConfiguration struct {
 	channelSize     int
 	handlers        map[string]HandlerFunc
 	deadLetterQueue string
+	middlewares     []func(Handler) Handler
 }
 
 type HandlerContext struct {
@@ -94,12 +105,20 @@ func NewConsumer() *SqsConsumer {
 
 func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *QueueConfiguration)) {
 	cfg := &QueueConfiguration{
-		handlers: map[string]HandlerFunc{},
+		handlers:    map[string]HandlerFunc{},
+		middlewares: make([]func(Handler) Handler, 0),
 	}
+
+	// chained := make(map[string]HandlerFunc)
+	// for k, v := range cfg.handlers {
+	// 	chained[k] = Chain(cfg.middlewares...).Handler(v).
+	// }
+
 	queueCfg(cfg)
 	queue := queue{
 		name:                queueName,
 		handlerRegistration: cfg.handlers,
+		middlewares:         cfg.middlewares,
 		incomingChannel:     make(chan *awssqs.Message, cfg.channelSize),
 		deleteChannel:       make(chan *string),
 		retryChannel:        make(chan *awssqs.Message),
@@ -108,19 +127,20 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 	s.queues = append(s.queues, queue)
 }
 
-func (cfg *QueueConfiguration) WithChannelSize(size int) *QueueConfiguration {
+func (cfg *QueueConfiguration) WithChannelSize(size int) {
 	cfg.channelSize = size
-	return cfg
 }
 
-func (cfg *QueueConfiguration) WithHandler(messageType string, handler HandlerFunc) *QueueConfiguration {
+func (cfg *QueueConfiguration) WithHandler(messageType string, handler HandlerFunc) {
 	cfg.handlers[messageType] = handler
-	return cfg
 }
 
-func (cfg *QueueConfiguration) WithDeadLetterQueue(queueName string) *QueueConfiguration {
+func (cfg *QueueConfiguration) WithDeadLetterQueue(queueName string) {
 	cfg.deadLetterQueue = queueName
-	return cfg
+}
+
+func (cfg *QueueConfiguration) Use(middleware func(Handler) Handler) {
+	cfg.middlewares = append(cfg.middlewares, middleware)
 }
 
 func (s *SqsConsumer) Run() chan error {
@@ -200,13 +220,15 @@ func (q *queue) handleInternal(message *awssqs.Message) {
 		return
 	}
 
+	h := Chain(q.middlewares...).Handler(handler)
+
 	ctx := &HandlerContext{
 		MessageId:   aws.StringValue(message.MessageId),
 		MessageType: messageType,
 		Context:     context.TODO(),
 	}
 
-	result := handler(ctx, aws.StringValue(message.Body))
+	result := h.Handle(ctx, aws.StringValue(message.Body))
 
 	switch result {
 	case Handled:
@@ -254,3 +276,53 @@ func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
 		}
 	}
 }
+
+// Chain returns a Middlewares type from a slice of middleware handlers.
+func Chain(middlewares ...func(Handler) Handler) Middlewares {
+	return Middlewares(middlewares)
+}
+
+// Handler builds and returns a Handler from the chain of middlewares,
+// with `h Handler` as the final handler.
+func (mws Middlewares) Handler(h Handler) Handler {
+	return &ChainHandler{h, chain(mws, h), mws}
+}
+
+// HandlerFunc builds and returns a Handler from the chain of middlewares,
+// with `h Handler` as the final handler.
+func (mws Middlewares) HandlerFunc(h HandlerFunc) Handler {
+	return &ChainHandler{h, chain(mws, h), mws}
+}
+
+// ChainHandler is a sqs.Handler with support for handler composition and
+// execution.
+type ChainHandler struct {
+	Endpoint    Handler
+	chain       Handler
+	Middlewares Middlewares
+}
+
+func (c *ChainHandler) Handle(ctx *HandlerContext, rawMsg string) HandlerResult {
+	return c.chain.Handle(ctx, rawMsg)
+}
+
+// chain builds a sqs.Handler composed of an inline middleware stack and endpoint
+// handler in the order they are passed.
+func chain(middlewares []func(Handler) Handler, endpoint Handler) Handler {
+	// Return ahead of time if there aren't any middlewares for the chain
+	if len(middlewares) == 0 {
+		return endpoint
+	}
+
+	// Wrap the end handler with the middleware chain
+	h := middlewares[len(middlewares)-1](endpoint)
+	for i := len(middlewares) - 2; i >= 0; i-- {
+		h = middlewares[i](h)
+	}
+
+	return h
+}
+
+// Middlewares type is a slice of standard middleware handlers with methods
+// to compose middleware chains and sqs.Handler's.
+type Middlewares []func(Handler) Handler

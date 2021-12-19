@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"time"
 
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
 	"github.com/sirupsen/logrus"
@@ -31,16 +30,5 @@ func (h *TestMessageHandler) Handle(ctx *sqs.HandlerContext, rawMsg string) sqs.
 		return sqs.DeadLetter
 	}
 
-	h.logger.Debug("Simulating delay by waiting 5 seconds")
-	time.Sleep(time.Second * 5)
-
-	h.logger.WithFields(convertHandlerContextToLogFields(ctx)).Info("Completed event")
 	return sqs.Handled
-}
-
-func convertHandlerContextToLogFields(ctx *sqs.HandlerContext) logrus.Fields {
-	return logrus.Fields{
-		"MessageId":   ctx.MessageId,
-		"MessageType": ctx.MessageType,
-	}
 }
