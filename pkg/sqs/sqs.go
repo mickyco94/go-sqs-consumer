@@ -9,7 +9,46 @@ import (
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
 
+// Features to add:
+// [?] Error handling and piping
+//   [] Define some error types
+// [] Move different processes to different channels, e.g. deadlettering
+// [] Message retry handlers, on a separate channel. Batch publish
+// [] Transient retries, only push to err channel if exhausted
+// [] Middleware, create a handler pipeline. Let users define their own
+//   [] Create some basic, like a timer. Logger etc.
+// [] Extend HandlerContext
+// [] Extend app to have viper config, take a config struct in for AWS settings at least
+// [] Make a decision on where the queue resolution should live
+// [] Some element of lazy loading
+// [] Graceful shutdown, block for requests in[]flight. Needs to be implemented for HTTP too
+//   [] Close all channels and attempt to cancel in-flight messages
+// [] Add docs, i.e. comments
+
 type HandlerFunc func(ctx *HandlerContext, rawMsg string) HandlerResult
+
+type queue struct {
+	name                string
+	deadLetterQueueName string
+	url                 string
+	deadLetterQueueUrl  string
+	sqs                 *SqsConsumer
+	handlerRegistration map[string]HandlerFunc
+	incomingChannel     chan *awssqs.Message
+	deleteChannel       chan *string
+	retryChannel        chan *awssqs.Message
+}
+
+// HandlerResult is an enum that indicates the action to take upon completion
+type HandlerResult int
+
+const (
+	//Handled indicates the message has been successfuly handled and will therefore be deleted from the queue
+	Handled = 0
+	//Retry will prompt the message to be re-enqueued with the specified delay
+	Retry      = 1
+	DeadLetter = 2
+)
 
 type SqsConsumer struct {
 	queues  []queue
@@ -174,6 +213,8 @@ func (q *queue) handleInternal(message *awssqs.Message) {
 		q.deleteMessage(message.ReceiptHandle)
 	case DeadLetter:
 		q.deadLetterMessage(message)
+	case Retry:
+		panic("Not yet implemented!")
 	}
 }
 
@@ -213,23 +254,3 @@ func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
 		}
 	}
 }
-
-type queue struct {
-	name                string
-	deadLetterQueueName string
-	url                 string
-	deadLetterQueueUrl  string
-	sqs                 *SqsConsumer
-	handlerRegistration map[string]HandlerFunc
-	incomingChannel     chan *awssqs.Message
-	deleteChannel       chan *string
-	retryChannel        chan *awssqs.Message
-}
-
-type HandlerResult int
-
-const (
-	Handled    = 0
-	Retry      = 1
-	DeadLetter = 2
-)
