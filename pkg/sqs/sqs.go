@@ -109,12 +109,13 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 		middlewares: make([]func(Handler) Handler, 0),
 	}
 
+	queueCfg(cfg)
+
 	chained := map[string]Handler{}
 	for k, v := range cfg.handlers {
 		chained[k] = Chain(cfg.middlewares...).Handler(v)
 	}
 
-	queueCfg(cfg)
 	queue := queue{
 		name:                queueName,
 		handlerRegistration: chained,
