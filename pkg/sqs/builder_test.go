@@ -22,9 +22,7 @@ func TestWithChannelSize(t *testing.T) {
 	builder.WithChannelSize(5)
 
 	// assert
-	if builder.channelSize != 5 {
-		t.Fatalf("Expected channel size to be %d, actually got %d", 5, builder.channelSize)
-	}
+	assert.Equal(t, 5, builder.channelSize)
 }
 
 func TestWithHandler(t *testing.T) {
@@ -47,9 +45,7 @@ func TestWithHandler(t *testing.T) {
 
 	actual(&mockReceiver{}, Request{})
 
-	if !invoked {
-		t.Fatalf("Expected resolved handler to be invoked")
-	}
+	assert.True(t, invoked)
 }
 
 func TestWithDeadLetterQueue(t *testing.T) {
