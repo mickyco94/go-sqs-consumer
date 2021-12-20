@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
@@ -15,8 +16,10 @@ import (
 
 type App struct {
 	logger      log.FieldLogger
-	sqsConsumer *sqs.SqsConsumer
+	sqsConsumer sqs.Consumer
 }
+
+var consumer sqs.Consumer
 
 func New() *App {
 
@@ -28,7 +31,7 @@ func New() *App {
 
 	testMessageHandler := handlers.NewTestMessageHandler(logger)
 
-	sqsConsumer := sqs.NewConsumer(aws.Config{
+	consumer = sqs.New(aws.Config{
 		Region:   aws.String("eu-west-1"),
 		Endpoint: aws.String("http://localhost:4566/"),
 		Credentials: credentials.NewCredentials(&credentials.StaticProvider{
@@ -39,7 +42,8 @@ func New() *App {
 		}),
 	})
 
-	sqsConsumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
+	consumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
+		c.WithRetryPolicy(time.Second*5, time.Second*10, time.Second*30, time.Second*60)
 		c.Use(pipeline.Logger(logger))
 		c.WithDeadLetterQueue("local-queue-dl")
 		c.WithChannelSize(100)
@@ -48,7 +52,7 @@ func New() *App {
 
 	a := &App{
 		logger:      logger,
-		sqsConsumer: sqsConsumer,
+		sqsConsumer: consumer,
 	}
 
 	a.configureLogging()
@@ -65,11 +69,13 @@ func (a *App) configureLogging() {
 
 }
 
+var r chi.Router
+
 func (a *App) Run() {
 	a.logger.Info("Starting application")
 	defer a.logger.Info("Shutting down application")
 
-	r := chi.NewRouter()
+	r = chi.NewRouter()
 
 	r.Use(func(h http.Handler) http.Handler {
 		fn := func(w http.ResponseWriter, r *http.Request) {

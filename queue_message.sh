@@ -2,7 +2,7 @@
 
 base='
 {
-    "foo": "bar"
+    "foo": "retry"
 }
 '
 
