@@ -21,14 +21,23 @@ func NewTestMessageHandler(logger logrus.FieldLogger) *TestMessageHandler {
 	}
 }
 
-func (h *TestMessageHandler) Handle(ctx *sqs.HandlerContext, rawMsg string) sqs.HandlerResult {
+func (h *TestMessageHandler) Handle(w sqs.ResponseReceiver, r sqs.Request) {
 	msg := &TestMessage{}
-	err := json.Unmarshal([]byte(rawMsg), msg)
+	err := json.Unmarshal([]byte(r.Body), msg)
 
 	if err != nil {
 		h.logger.WithError(err).Error("Error deserialising event")
-		return sqs.DeadLetter
+		w.DeadLetter()
 	}
 
-	return sqs.Handled
+	if msg.Foo == "deadletter" {
+		w.DeadLetter()
+		return
+	}
+
+	if msg.Foo == "retry" {
+		w.Retry()
+	}
+
+	w.Handled()
 }

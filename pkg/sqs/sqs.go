@@ -2,10 +2,9 @@ package sqs
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/session"
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
@@ -16,7 +15,7 @@ import (
 // [] Move different processes to different channels, e.g. deadlettering
 // [] Message retry handlers, on a separate channel. Batch publish
 // [] Transient retries, only push to err channel if exhausted
-// [] Middleware, create a handler pipeline. Let users define their own
+// [x] Middleware, create a handler pipeline. Let users define their own
 //   [] Create some basic, like a timer. Logger etc.
 // [] Extend HandlerContext
 // [] Extend app to have viper config, take a config struct in for AWS settings at least
@@ -25,16 +24,89 @@ import (
 // [] Graceful shutdown, block for requests in[]flight. Needs to be implemented for HTTP too
 //   [] Close all channels and attempt to cancel in-flight messages
 // [] Add docs, i.e. comments
+// [x] Move to using a result writer + request context pattern that is more in-line with idiomatic go
+// [] Arbritrary context thing
 
-type HandlerFunc func(ctx *HandlerContext, rawMsg string) HandlerResult
+type ResponseReceiver interface {
+	DeadLetter() error
+	Retry() error
+	Handled() error
+	GetResult() HandlerResult
+}
 
-// ServeHTTP calls f(w, r).
-func (f HandlerFunc) Handle(ctx *HandlerContext, r string) HandlerResult {
-	return f(ctx, r)
+type Body string
+
+type Request struct {
+	context         context.Context
+	MessageId       string
+	MessageType     string
+	Body            Body
+	originalMessage awssqs.Message
+}
+
+type requestHandler struct {
+	request Request
+	q       *queue
+	result  HandlerResult
+}
+
+//DeadLetter directly does this, instead we should write to a channel that is consumed within this file
+//That dead-letters the queue itself
+func (r *requestHandler) DeadLetter() error {
+
+	if r.result != Unhandled {
+		return errors.New("message has already been handled")
+	}
+
+	r.result = DeadLetter
+	func() {
+		r.q.deadLetterChannel <- &r.request.originalMessage
+	}()
+
+	return nil
+}
+
+func (r *requestHandler) Retry() error {
+
+	if r.result != Unhandled {
+		return errors.New("message has already been handled")
+	}
+
+	r.result = Retry
+	go func() {
+		r.q.retryChannel <- &r.request.originalMessage
+	}()
+
+	return nil
+}
+
+func (r *requestHandler) Handled() error {
+
+	if r.result != Unhandled {
+		return errors.New("message has already been handled")
+	}
+
+	r.result = Handled
+
+	go func() {
+		r.q.handleChannel <- receiptHandle(r.request.originalMessage.ReceiptHandle)
+	}()
+
+	return nil
+}
+
+func (r *requestHandler) GetResult() HandlerResult {
+	return r.result
+}
+
+type HandlerFunc func(w ResponseReceiver, r Request)
+
+func (f HandlerFunc) Handle(w ResponseReceiver, r Request) {
+	f(w, r)
 }
 
 type Handler interface {
-	Handle(*HandlerContext, string) HandlerResult
+	Handle(ResponseReceiver, Request)
 }
 
 type queue struct {
@@ -45,19 +117,23 @@ type queue struct {
 	sqs                 *SqsConsumer
 	handlerRegistration map[string]Handler
 	incomingChannel     chan *awssqs.Message
-	deleteChannel       chan *string
+	deadLetterChannel   chan *awssqs.Message
 	retryChannel        chan *awssqs.Message
+	handleChannel       chan receiptHandle
 }
 
 // HandlerResult is an enum that indicates the action to take upon completion
 type HandlerResult int
 
 const (
+	//Unhandled indicates the message has yet to be processed by the event pipeline
+	Unhandled = 0
 	//Handled indicates the message has been successfuly handled and will therefore be deleted from the queue
-	Handled = 0
+	Handled = 1
 	//Retry will prompt the message to be re-enqueued with the specified delay
-	Retry      = 1
-	DeadLetter = 2
+	Retry = 2
+	//DeadLetter will send the message to the configured dead-letter queue
+	DeadLetter = 3
 )
 
 type SqsConsumer struct {
@@ -66,6 +142,8 @@ type SqsConsumer struct {
 	errChan chan error
 }
 
+type receiptHandle *string
+
 type QueueConfiguration struct {
 	channelSize     int
 	handlers        map[string]HandlerFunc
@@ -73,25 +151,10 @@ type QueueConfiguration struct {
 	middlewares     []func(Handler) Handler
 }
 
-type HandlerContext struct {
-	context.Context
-	MessageId   string
-	MessageType string
-}
-
-func NewConsumer() *SqsConsumer {
+func NewConsumer(cfg aws.Config) *SqsConsumer {
 
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
-		Config: aws.Config{
-			Region:   aws.String("eu-west-1"),
-			Endpoint: aws.String("http://localhost:4566/"),
-			Credentials: credentials.NewCredentials(&credentials.StaticProvider{
-				Value: credentials.Value{
-					AccessKeyID:     "XX",
-					SecretAccessKey: "XX",
-				},
-			}),
-		},
+		Config: cfg,
 	}))
 
 	s := &SqsConsumer{
@@ -118,12 +181,15 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 
 	queue := queue{
 		name:                queueName,
+		deadLetterQueueName: cfg.deadLetterQueue,
 		handlerRegistration: chained,
 		incomingChannel:     make(chan *awssqs.Message, cfg.channelSize),
-		deleteChannel:       make(chan *string),
+		deadLetterChannel:   make(chan *awssqs.Message),
+		handleChannel:       make(chan receiptHandle),
 		retryChannel:        make(chan *awssqs.Message),
 		sqs:                 s,
 	}
+
 	s.queues = append(s.queues, queue)
 }
 
@@ -143,7 +209,7 @@ func (cfg *QueueConfiguration) Use(middleware func(Handler) Handler) {
 	cfg.middlewares = append(cfg.middlewares, middleware)
 }
 
-func (s *SqsConsumer) Run() chan error {
+func (s *SqsConsumer) Listen() chan error {
 
 	for _, q := range s.queues {
 		q.listenForMessages()
@@ -164,7 +230,7 @@ func (s *SqsConsumer) getQueueUrl(queueName string) (string, error) {
 	return aws.StringValue(res.QueueUrl), nil
 }
 
-func (q *queue) deleteMessage(receiptHandle *string) {
+func (q *queue) deleteMessage(receiptHandle receiptHandle) {
 	q.sqs.sqs.DeleteMessage(&awssqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.url),
 		ReceiptHandle: receiptHandle,
@@ -199,6 +265,19 @@ func (q *queue) listenForMessages() {
 			go q.handleInternal(message)
 		}
 	}()
+
+	go func() {
+		for receiptHandle := range q.handleChannel {
+			go q.deleteMessage(receiptHandle)
+		}
+	}()
+
+	go func() {
+		for message := range q.deadLetterChannel {
+			go q.deadLetterMessage(message)
+		}
+	}()
+
 	go q.pollMessages(q.incomingChannel)
 }
 
@@ -216,27 +295,25 @@ func (q *queue) handleInternal(message *awssqs.Message) {
 	handler := q.handlerRegistration[messageType]
 
 	if handler == nil {
-		fmt.Println("Couldn't find a handler")
 		q.deleteMessage(message.ReceiptHandle)
 		return
 	}
 
-	ctx := &HandlerContext{
-		MessageId:   aws.StringValue(message.MessageId),
-		MessageType: messageType,
-		Context:     context.TODO(),
+	request := Request{
+		Body:            Body(aws.StringValue(message.Body)),
+		originalMessage: *message,
+		MessageType:     messageType,
+		context:         context.Background(),
+		MessageId:       aws.StringValue(message.MessageId),
 	}
 
-	result := handler.Handle(ctx, aws.StringValue(message.Body))
-
-	switch result {
-	case Handled:
-		q.deleteMessage(message.ReceiptHandle)
-	case DeadLetter:
-		q.deadLetterMessage(message)
-	case Retry:
-		panic("Not yet implemented!")
+	internalHandler := &requestHandler{
+		request: request,
+		q:       q,
+		result:  0,
 	}
+
+	handler.Handle(internalHandler, request)
 }
 
 func (q *queue) deadLetterMessage(msg *awssqs.Message) {
@@ -264,8 +341,6 @@ func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
 		})
 
 		if err != nil {
-			//This error could be transient, maybe we want them to be able to have an event listener for this err?
-			//Error channel
 			q.sqs.errChan <- err
 			continue
 		}
@@ -301,8 +376,8 @@ type ChainHandler struct {
 	Middlewares Middlewares
 }
 
-func (c *ChainHandler) Handle(ctx *HandlerContext, rawMsg string) HandlerResult {
-	return c.chain.Handle(ctx, rawMsg)
+func (c *ChainHandler) Handle(w ResponseReceiver, r Request) {
+	c.chain.Handle(w, r)
 }
 
 // chain builds a sqs.Handler composed of an inline middleware stack and endpoint

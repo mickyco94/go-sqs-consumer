@@ -3,6 +3,8 @@ package app
 import (
 	"net/http"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/internal/handlers"
@@ -26,7 +28,16 @@ func New() *App {
 
 	testMessageHandler := handlers.NewTestMessageHandler(logger)
 
-	sqsConsumer := sqs.NewConsumer()
+	sqsConsumer := sqs.NewConsumer(aws.Config{
+		Region:   aws.String("eu-west-1"),
+		Endpoint: aws.String("http://localhost:4566/"),
+		Credentials: credentials.NewCredentials(&credentials.StaticProvider{
+			Value: credentials.Value{
+				AccessKeyID:     "XX",
+				SecretAccessKey: "XX",
+			},
+		}),
+	})
 
 	sqsConsumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
 		c.Use(pipeline.Logger(logger))
@@ -70,7 +81,6 @@ func (a *App) Run() {
 	})
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
-	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 
 	r.Get("/_system/health", func(rw http.ResponseWriter, r *http.Request) {
@@ -78,7 +88,7 @@ func (a *App) Run() {
 		rw.Write([]byte("Healthy"))
 	})
 
-	errs := a.sqsConsumer.Run()
+	errs := a.sqsConsumer.Listen()
 
 	go func() {
 		for err := range errs {

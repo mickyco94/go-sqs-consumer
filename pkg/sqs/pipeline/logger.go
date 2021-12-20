@@ -9,20 +9,20 @@ import (
 
 func Logger(logger logrus.FieldLogger) func(next sqs.Handler) sqs.Handler {
 	return func(next sqs.Handler) sqs.Handler {
-		return sqs.HandlerFunc(func(ctx *sqs.HandlerContext, rawMsg string) sqs.HandlerResult {
+		return sqs.HandlerFunc(func(w sqs.ResponseReceiver, r sqs.Request) {
 
 			start := time.Now()
-			res := next.Handle(ctx, rawMsg)
+
+			next.Handle(w, r)
 
 			elapsed := time.Since(start)
 
 			logger.WithFields(logrus.Fields{
-				"Duration":  elapsed,
-				"Result":    res,
-				"MessageId": ctx.MessageId,
+				"Duration":    elapsed,
+				"Result":      w.GetResult(),
+				"MessageId":   r.MessageId,
+				"MessageType": r.MessageType,
 			}).Info("Handled message")
-
-			return res
 		})
 	}
 }
