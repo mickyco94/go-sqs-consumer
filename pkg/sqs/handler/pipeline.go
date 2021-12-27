@@ -1,4 +1,6 @@
-package sqs
+package handler
+
+import "github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
 
 // Chain returns a Middlewares type from a slice of middleware handlers.
 func Chain(middlewares ...func(Handler) Handler) Middlewares {
@@ -25,7 +27,7 @@ type ChainHandler struct {
 	Middlewares Middlewares
 }
 
-func (c *ChainHandler) Handle(w ResponseReceiver, r Request) {
+func (c *ChainHandler) Handle(w sqs.ResponseReceiver, r sqs.Request) {
 	c.chain.Handle(w, r)
 }
 

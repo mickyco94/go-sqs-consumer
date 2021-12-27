@@ -1,9 +1,9 @@
-package sqs
+package handler
 
 import (
 	"testing"
-	"time"
 
+	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -14,24 +14,13 @@ func (m mockReceiver) Retry() error             { return nil }
 func (m mockReceiver) Handled() error           { return nil }
 func (m mockReceiver) GetResult() HandlerResult { return Handled }
 
-func TestWithChannelSize(t *testing.T) {
-	// arrange
-	builder := NewQueueConfiguration()
-
-	// act
-	builder.WithChannelSize(5)
-
-	// assert
-	assert.Equal(t, 5, builder.channelSize)
-}
-
 func TestWithHandler(t *testing.T) {
 	// arrange
-	builder := NewQueueConfiguration()
+	builder := HandlerQueueConfiguration{}
 
 	invoked := false
 
-	mockHandler := func(w ResponseReceiver, r Request) {
+	mockHandler := func(w sqs.ResponseReceiver, r sqs.Request) {
 		invoked = true
 	}
 
@@ -43,42 +32,42 @@ func TestWithHandler(t *testing.T) {
 
 	assert.NotNil(t, actual)
 
-	actual(&mockReceiver{}, Request{})
+	actual.Handle(&mockReceiver{}, sqs.Request{})
 
 	assert.True(t, invoked)
 }
 
-func TestWithDeadLetterQueue(t *testing.T) {
-	// arrange
-	builder := NewQueueConfiguration()
+// func TestWithDeadLetterQueue(t *testing.T) {
+// 	// arrange
+// 	builder := HandlerQueueConfiguration{}
 
-	// act
-	builder.WithDeadLetterQueue("test-dl")
+// 	// act
+// 	builder.WithDeadLetterQueue("test-dl")
 
-	// assert
-	assert.Equal(t, "test-dl", builder.deadLetterQueue)
-}
+// 	// assert
+// 	assert.Equal(t, "test-dl", builder.deadLetterQueue)
+// }
 
-func TestWithRetryPolicy(t *testing.T) {
-	// arrange
-	builder := NewQueueConfiguration()
+// func TestWithRetryPolicy(t *testing.T) {
+// 	// arrange
+// 	builder := HandlerQueueConfiguration{}
 
-	retries := []time.Duration{time.Hour, time.Second, time.Minute}
+// 	retries := []time.Duration{time.Hour, time.Second, time.Minute}
 
-	// act
-	builder.WithRetryPolicy(retries...)
+// 	// act
+// 	builder.WithRetryPolicy(retries...)
 
-	// assert
-	assert.Equal(t, retries, builder.retryConfig)
-}
+// 	// assert
+// 	assert.Equal(t, retries, builder.retryConfig)
+// }
 
 type mockHandler struct{}
 
-func (m mockHandler) Handle(ResponseReceiver, Request) {}
+func (m mockHandler) Handle(sqs.ResponseReceiver, sqs.Request) {}
 
 func TestUse(t *testing.T) {
 	// arrange
-	builder := NewQueueConfiguration()
+	builder := HandlerQueueConfiguration{}
 	invoked := false
 
 	// act

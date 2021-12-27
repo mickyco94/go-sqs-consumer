@@ -13,9 +13,8 @@ func New(cfg aws.Config) *SqsConsumer {
 	}))
 
 	s := &SqsConsumer{
-		sqs:     awssqs.New(sess),
-		errChan: make(chan error),
-		queues:  make([]queue, 0),
+		sqs:    awssqs.New(sess),
+		queues: make([]*queue, 0),
 	}
 
 	return s
@@ -23,49 +22,45 @@ func New(cfg aws.Config) *SqsConsumer {
 
 func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *QueueConfiguration)) {
 	cfg := &QueueConfiguration{
-		handlers:    map[string]HandlerFunc{},
-		middlewares: make([]func(Handler) Handler, 0),
+		// handlers:    map[string]HandlerFunc{},
+		// middlewares: make([]func(Handler) Handler, 0),
 	}
 
 	queueCfg(cfg)
 
-	chained := map[string]Handler{}
-	for k, v := range cfg.handlers {
-		chained[k] = Chain(cfg.middlewares...).Handler(v)
-	}
+	// chained := map[string]Handler{}
+	// for k, v := range cfg.handlers {
+	// 	chained[k] = Chain(cfg.middlewares...).Handler(v)
+	// }
 
 	queue := queue{
 		name:                queueName,
 		deadLetterQueueName: cfg.deadLetterQueue,
-		handlerRegistration: chained,
-		incomingChannel:     make(chan *awssqs.Message, cfg.channelSize),
-		deadLetterChannel:   make(chan *awssqs.Message),
-		handleChannel:       make(chan receiptHandle),
-		retryChannel:        make(chan *awssqs.Message),
 		retryPolicy:         cfg.retryConfig,
-		sqs:                 s,
+		client:              *s.sqs,
+		resultChannel:       make(chan *Result),
 	}
 
-	s.queues = append(s.queues, queue)
+	s.queues = append(s.queues, &queue)
 }
 
-func (s *SqsConsumer) Listen() chan error {
+func (s *SqsConsumer) Listen() (chan *Result, error) {
+	agg := make(chan *Result)
 
 	for _, q := range s.queues {
-		q.listenForMessages()
+		go func() {
+			for v := range q.resultChannel {
+				agg <- v
+			}
+		}()
 	}
 
-	return s.errChan
-}
-
-func (s *SqsConsumer) getQueueUrl(queueName string) (string, error) {
-	res, err := s.sqs.GetQueueUrl(&awssqs.GetQueueUrlInput{
-		QueueName: aws.String(queueName),
-	})
-
-	if err != nil {
-		return "", nil
+	for _, q := range s.queues {
+		_, err := q.listenForMessages()
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return aws.StringValue(res.QueueUrl), nil
+	return agg, nil
 }

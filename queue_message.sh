@@ -8,7 +8,8 @@ base='
 
 message_attributes='
 {
-    "MessageType": { "DataType": "String", "StringValue": "test" }
+    "MessageType": { "DataType": "String", "StringValue": "test" },
+    "Testy": { "DataType": "String", "StringValue": "test" }
 }
 '
 

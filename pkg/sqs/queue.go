@@ -7,8 +7,17 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/sqs"
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
+
+//Move to using channels that return Request struct
+//Have a separate error channel that they can also listen to
+//Put all of these in the same struct and return from listen
+//Move handler stuff into a separate package
+//sqs/handler/pipeline
+//handler can be purpose built for reading from these channels
+//pipeline can be an extension that allows you to add middleware and defines some basic middlewares
 
 type queue struct {
 	name                string
@@ -16,123 +25,99 @@ type queue struct {
 	url                 string
 	deadLetterQueueUrl  string
 	retryPolicy         []time.Duration
-	sqs                 *SqsConsumer
-	handlerRegistration map[string]Handler
-	incomingChannel     chan *awssqs.Message
-	deadLetterChannel   chan *awssqs.Message
-	retryChannel        chan *awssqs.Message
-	handleChannel       chan receiptHandle
+	resultChannel       chan *Result
+	client              sqs.SQS
 }
 
-func (q *queue) deleteMessage(receiptHandle receiptHandle) {
-	q.sqs.sqs.DeleteMessage(&awssqs.DeleteMessageInput{
+func (q *queue) deleteMessage(rh receiptHandle) error {
+	_, err := q.client.DeleteMessage(&awssqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.url),
-		ReceiptHandle: receiptHandle,
+		ReceiptHandle: rh,
 	})
-}
-
-func (q *queue) listenForMessages() {
-	queueUrl, err := q.sqs.getQueueUrl(q.deadLetterQueueName)
 
 	if err != nil {
-		q.sqs.errChan <- err
-		return
+		return err
+	}
+
+	return nil
+}
+
+func (q *queue) listenForMessages() (chan *Result, error) {
+	queueUrl, err := getQueueUrl(q.client, q.deadLetterQueueName)
+
+	if err != nil {
+		return nil, err
 	} else {
 		q.deadLetterQueueUrl = queueUrl
 	}
 
-	queueUrl, err = q.sqs.getQueueUrl(q.name)
+	queueUrl, err = getQueueUrl(q.client, q.name)
 
 	if err != nil {
-		q.sqs.errChan <- err
-		return
+		return nil, err
 	} else {
 		q.url = queueUrl
 	}
 
-	if err != nil {
-		q.sqs.errChan <- err
-	}
+	go q.pollMessages()
 
-	go func() {
-		for message := range q.incomingChannel {
-			go q.handleInternal(message)
-		}
-	}()
-
-	go func() {
-		for receiptHandle := range q.handleChannel {
-			go q.deleteMessage(receiptHandle)
-		}
-	}()
-
-	go func() {
-		for message := range q.deadLetterChannel {
-			go q.deadLetterMessage(message)
-		}
-	}()
-
-	go func() {
-		for message := range q.retryChannel {
-			go q.retry(message)
-		}
-	}()
-
-	go q.pollMessages(q.incomingChannel)
+	return q.resultChannel, nil
 }
 
-func (q *queue) handleInternal(message *awssqs.Message) {
+// func (q *queue) handleInternal(message *awssqs.Message) {
 
-	messageTypeAttribute := message.MessageAttributes["MessageType"]
+// 	messageTypeAttribute := message.MessageAttributes["MessageType"]
 
-	if messageTypeAttribute == nil {
-		q.deleteMessage(message.ReceiptHandle)
-		return
-	}
+// 	if messageTypeAttribute == nil {
+// 		q.deleteMessage(message.ReceiptHandle)
+// 		return
+// 	}
 
-	messageType := aws.StringValue(messageTypeAttribute.StringValue)
+// 	messageType := aws.StringValue(messageTypeAttribute.StringValue)
 
-	handler := q.handlerRegistration[messageType]
+// 	handler := q.handlerRegistration[messageType]
 
-	if handler == nil {
-		q.deleteMessage(message.ReceiptHandle)
-		return
-	}
+// 	if handler == nil {
+// 		q.deleteMessage(message.ReceiptHandle)
+// 		return
+// 	}
 
-	request := Request{
-		Body:            Body(aws.StringValue(message.Body)),
-		originalMessage: *message,
-		MessageType:     messageType,
-		context:         context.Background(),
-		MessageId:       aws.StringValue(message.MessageId),
-	}
+// 	request := Request{
+// 		Body:            Body(aws.StringValue(message.Body)),
+// 		originalMessage: *message,
+// 		MessageType:     messageType,
+// 		context:         context.Background(),
+// 		MessageId:       aws.StringValue(message.MessageId),
+// 	}
 
-	internalHandler := &requestHandler{
-		request: request,
-		q:       q,
-		result:  0,
-	}
+// 	internalHandler := &requestHandler{
+// 		request: request,
+// 		q:       q,
+// 		result:  0,
+// 	}
 
-	handler.Handle(internalHandler, request)
-}
+// 	handler.Handle(internalHandler, request)
+// }
 
-func (q *queue) retry(msg *awssqs.Message) {
+func (q *queue) retry(msg *awssqs.Message) error {
 	attemptNumber := 0
 
 	currentAttemptAttribute := msg.MessageAttributes["RetryCount"]
 
-	parsed, err := strconv.Atoi(aws.StringValue(currentAttemptAttribute.StringValue))
+	if currentAttemptAttribute != nil {
+		parsed, err := strconv.Atoi(aws.StringValue(currentAttemptAttribute.StringValue))
 
-	if err != nil {
-		attemptNumber = int(parsed)
+		if err != nil {
+			attemptNumber = int(parsed)
+		}
 	}
 
 	attemptNumber++
 
-	if attemptNumber > len(q.retryPolicy) {
+	if attemptNumber >= len(q.retryPolicy) {
 		//Retries exhausted, dead letter
 		q.deadLetterMessage(msg)
-		return
+		return nil
 	}
 
 	msg.MessageAttributes["RetryCount"] = &awssqs.MessageAttributeValue{
@@ -142,33 +127,57 @@ func (q *queue) retry(msg *awssqs.Message) {
 
 	delay := q.retryPolicy[attemptNumber-1]
 
-	q.sqs.sqs.SendMessage(&awssqs.SendMessageInput{
+	q.client.SendMessage(&awssqs.SendMessageInput{
 		DelaySeconds:      aws.Int64(int64(delay.Seconds())),
 		MessageAttributes: msg.MessageAttributes,
 		MessageBody:       msg.Body,
 		QueueUrl:          &q.url,
 	})
 
+	return nil
 }
 
-func (q *queue) deadLetterMessage(msg *awssqs.Message) {
-	_, err := q.sqs.sqs.SendMessage(&awssqs.SendMessageInput{
+func (q *queue) deadLetterMessage(msg *awssqs.Message) error {
+	_, err := q.client.SendMessage(&awssqs.SendMessageInput{
 		MessageBody:       msg.Body,
 		MessageAttributes: msg.MessageAttributes,
 		QueueUrl:          &q.deadLetterQueueUrl,
 	})
 
 	if err != nil {
-		q.sqs.errChan <- err
-		return
+		return err
 	}
+
+	q.deleteMessage(msg.ReceiptHandle)
+
+	return nil
 }
 
-func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
+type Result struct {
+	Error          error
+	Receiver       ResponseReceiver
+	MessageRequest Request
+}
+
+func getQueueUrl(s awssqs.SQS, queueName string) (string, error) {
+	res, err := s.GetQueueUrl(&awssqs.GetQueueUrlInput{
+		QueueName: aws.String(queueName),
+	})
+
+	if err != nil {
+		return "", nil
+	}
+
+	return aws.StringValue(res.QueueUrl), nil
+}
+
+func (q *queue) pollMessages() {
 
 	for {
 
-		output, err := q.sqs.sqs.ReceiveMessage(&awssqs.ReceiveMessageInput{
+		res := &Result{}
+
+		messages, err := q.client.ReceiveMessage(&awssqs.ReceiveMessageInput{
 			QueueUrl:              aws.String(q.url),
 			WaitTimeSeconds:       aws.Int64(15),
 			MessageAttributeNames: []*string{aws.String("All")},
@@ -176,12 +185,46 @@ func (q *queue) pollMessages(chn chan<- *awssqs.Message) {
 		})
 
 		if err != nil {
-			q.sqs.errChan <- err
+			res.Error = err
+			q.resultChannel <- res
 			continue
 		}
 
-		for _, message := range output.Messages {
-			chn <- message
+		if len(messages.Messages) == 0 {
+			continue
+		}
+
+		for _, message := range messages.Messages {
+
+			messageType := ""
+
+			messageTypeAttribute := message.MessageAttributes["MessageType"]
+
+			if messageTypeAttribute != nil {
+				messageType = aws.StringValue(messageTypeAttribute.StringValue)
+			}
+
+			h := &requestHandler{
+				request: Request{
+					context:         context.TODO(),
+					MessageId:       aws.StringValue(message.MessageId),
+					MessageType:     messageType,
+					Attempt:         1, //TODO: Populate from message attributes
+					MaxAttempts:     len(q.retryPolicy),
+					Body:            Body(aws.StringValue(message.Body)),
+					originalMessage: *message,
+				},
+				acted: false,
+				q:     q,
+			}
+
+			res.Receiver = h
+			res.MessageRequest = h.request
+
+			//Don't block
+			go func() {
+				q.resultChannel <- res
+			}()
 		}
 	}
 }

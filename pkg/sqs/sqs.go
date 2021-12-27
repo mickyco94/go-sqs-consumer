@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"context"
+	"time"
 
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
@@ -29,7 +30,6 @@ type ResponseReceiver interface {
 	DeadLetter() error
 	Retry() error
 	Handled() error
-	GetResult() HandlerResult
 }
 
 type Body string
@@ -38,43 +38,26 @@ type Request struct {
 	context         context.Context
 	MessageId       string
 	MessageType     string
+	Attempt         int
+	MaxAttempts     int
 	Body            Body
 	originalMessage awssqs.Message
 }
 
 type Consumer interface {
 	Consume(queueName string, queueCfg func(queueConfig *QueueConfiguration))
-	Listen() chan error
+	Listen() (chan *Result, error)
 }
 
-type HandlerFunc func(w ResponseReceiver, r Request)
-
-func (f HandlerFunc) Handle(w ResponseReceiver, r Request) {
-	f(w, r)
+type QueueConfiguration struct {
+	channelSize     int
+	deadLetterQueue string
+	retryConfig     []time.Duration
 }
-
-type Handler interface {
-	Handle(ResponseReceiver, Request)
-}
-
-// HandlerResult is an enum that indicates the action to take upon completion
-type HandlerResult int
-
-const (
-	//Unhandled indicates the message has yet to be processed by the event pipeline
-	Unhandled = 0
-	//Handled indicates the message has been successfuly handled and will therefore be deleted from the queue
-	Handled = 1
-	//Retry will prompt the message to be re-enqueued with the specified delay
-	Retry = 2
-	//DeadLetter will send the message to the configured dead-letter queue
-	DeadLetter = 3
-)
 
 type SqsConsumer struct {
-	queues  []queue
-	sqs     *awssqs.SQS
-	errChan chan error
+	queues []*queue
+	sqs    *awssqs.SQS
 }
 
 type receiptHandle *string
