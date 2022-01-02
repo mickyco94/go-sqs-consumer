@@ -21,17 +21,9 @@ func New(cfg aws.Config) *SqsConsumer {
 }
 
 func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *QueueConfiguration)) {
-	cfg := &QueueConfiguration{
-		// handlers:    map[string]HandlerFunc{},
-		// middlewares: make([]func(Handler) Handler, 0),
-	}
+	cfg := &QueueConfiguration{}
 
 	queueCfg(cfg)
-
-	// chained := map[string]Handler{}
-	// for k, v := range cfg.handlers {
-	// 	chained[k] = Chain(cfg.middlewares...).Handler(v)
-	// }
 
 	queue := queue{
 		name:                queueName,
@@ -47,19 +39,22 @@ func (s *SqsConsumer) Consume(queueName string, queueCfg func(queueConfig *Queue
 func (s *SqsConsumer) Listen() (chan *Result, error) {
 	agg := make(chan *Result)
 
-	for _, q := range s.queues {
-		go func() {
-			for v := range q.resultChannel {
-				agg <- v
-			}
-		}()
-	}
+	chans := make([]chan *Result, len(s.queues))
 
-	for _, q := range s.queues {
-		_, err := q.listenForMessages()
+	for i, q := range s.queues {
+		c, err := q.listenForMessages()
 		if err != nil {
 			return nil, err
 		}
+		chans[i] = c
+	}
+
+	for _, c := range chans {
+		go func() {
+			for v := range c {
+				agg <- v
+			}
+		}()
 	}
 
 	return agg, nil

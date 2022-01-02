@@ -1,16 +1,19 @@
 package sqs
 
 import (
+	"errors"
 	"fmt"
 )
 
 type MessageStateError struct {
-	Next string
+	Current MessageState
+	Next    MessageState
 }
 
 func (e *MessageStateError) Error() string {
-	return fmt.Sprintf("Attempted to modify state of method that has already been completed",
-		e.Next)
+	return fmt.Sprintf("Attempted to change message state to %v when current state is %v",
+		e.Next,
+		e.Current)
 }
 
 //Possibly instead of actually acting on the dead letter in this method
@@ -18,56 +21,60 @@ func (e *MessageStateError) Error() string {
 type requestHandler struct {
 	request Request
 	q       *queue
-	acted   bool
+	state   MessageState
 }
 
 //DeadLetter directly does this, instead we should write to a channel that is consumed within this file
 //That dead-letters the queue itself
 func (r *requestHandler) DeadLetter() error {
 
-	if r.acted {
+	if r.state != Unhandled {
 		return &MessageStateError{
-			Next: "DeadLetter",
+			Current: r.state,
+			Next:    DeadLetter,
 		}
 	}
-
-	// r.result = DeadLetter
-	r.acted = true
 
 	err := r.q.deleteMessage(r.request.originalMessage.ReceiptHandle)
 
 	if err != nil {
 		return err
 	}
+
+	r.state = DeadLetter
 
 	return nil
 }
 
 func (r *requestHandler) Retry() error {
 
-	if r.acted {
+	if r.state != Unhandled {
 		return &MessageStateError{
-			Next: "DeadLetter",
+			Current: r.state,
+			Next:    Retry,
 		}
 	}
 
-	// r.result = Retry
+	if r.request.Attempt >= r.request.MaxAttempts {
+		return errors.New("exceeded retry attempts")
+	}
 
 	//Return an error from this
 	r.q.retry(&r.request.originalMessage)
+
+	r.state = Retry
 
 	return nil
 }
 
 func (r *requestHandler) Handled() error {
 
-	if r.acted {
+	if r.state != Unhandled {
 		return &MessageStateError{
-			Next: "DeadLetter",
+			Current: r.state,
+			Next:    Retry,
 		}
 	}
-
-	r.acted = true
 
 	err := r.q.deleteMessage(r.request.originalMessage.ReceiptHandle)
 
@@ -75,9 +82,11 @@ func (r *requestHandler) Handled() error {
 		return err
 	}
 
+	r.state = Handled
+
 	return nil
 }
 
-// func (r *requestHandler) GetResult() HandlerResult {
-// 	return r.result
-// }
+func (r *requestHandler) GetResult() MessageState {
+	return r.state
+}

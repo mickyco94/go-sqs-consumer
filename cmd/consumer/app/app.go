@@ -8,9 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/internal/handlers"
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
 	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/handler"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/pipeline"
+	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/handler/pipeline"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -44,10 +45,8 @@ func New() *App {
 
 	consumer.Consume("local-queue", func(c *sqs.QueueConfiguration) {
 		c.WithRetryPolicy(time.Second*5, time.Second*10, time.Second*30, time.Second*60)
-		// c.Use(pipeline.Logger(logger))
 		c.WithDeadLetterQueue("local-queue-dl")
 		c.WithChannelSize(100)
-		// c.WithHandler("test", testMessageHandler.Handle)
 	})
 
 	// consumer.Consume("local-queue-dl", func(queueConfig *sqs.QueueConfiguration) {
@@ -86,14 +85,6 @@ func (a *App) Run() {
 
 	r = chi.NewRouter()
 
-	r.Use(func(h http.Handler) http.Handler {
-		fn := func(w http.ResponseWriter, r *http.Request) {
-
-			h.ServeHTTP(w, r)
-		}
-
-		return http.HandlerFunc(fn)
-	})
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Recoverer)
@@ -105,9 +96,7 @@ func (a *App) Run() {
 
 	err := handler.New(a.sqsConsumer, func(handlerCfg *handler.HandlerQueueConfiguration) {
 		handlerCfg.Use(pipeline.Logger(a.logger))
-		handlerCfg.WithHandler("test", func(w sqs.ResponseReceiver, r sqs.Request) {
-			w.Handled()
-		})
+		handlerCfg.WithHandler("test", handlers.NewTestMessageHandler(a.logger).Handle)
 	})
 
 	if err != nil {

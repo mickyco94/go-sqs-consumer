@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/sqs"
 	awssqs "github.com/aws/aws-sdk-go/service/sqs"
 )
 
@@ -26,7 +25,7 @@ type queue struct {
 	deadLetterQueueUrl  string
 	retryPolicy         []time.Duration
 	resultChannel       chan *Result
-	client              sqs.SQS
+	client              awssqs.SQS
 }
 
 func (q *queue) deleteMessage(rh receiptHandle) error {
@@ -64,41 +63,6 @@ func (q *queue) listenForMessages() (chan *Result, error) {
 	return q.resultChannel, nil
 }
 
-// func (q *queue) handleInternal(message *awssqs.Message) {
-
-// 	messageTypeAttribute := message.MessageAttributes["MessageType"]
-
-// 	if messageTypeAttribute == nil {
-// 		q.deleteMessage(message.ReceiptHandle)
-// 		return
-// 	}
-
-// 	messageType := aws.StringValue(messageTypeAttribute.StringValue)
-
-// 	handler := q.handlerRegistration[messageType]
-
-// 	if handler == nil {
-// 		q.deleteMessage(message.ReceiptHandle)
-// 		return
-// 	}
-
-// 	request := Request{
-// 		Body:            Body(aws.StringValue(message.Body)),
-// 		originalMessage: *message,
-// 		MessageType:     messageType,
-// 		context:         context.Background(),
-// 		MessageId:       aws.StringValue(message.MessageId),
-// 	}
-
-// 	internalHandler := &requestHandler{
-// 		request: request,
-// 		q:       q,
-// 		result:  0,
-// 	}
-
-// 	handler.Handle(internalHandler, request)
-// }
-
 func (q *queue) retry(msg *awssqs.Message) error {
 	attemptNumber := 0
 
@@ -116,7 +80,7 @@ func (q *queue) retry(msg *awssqs.Message) error {
 
 	if attemptNumber >= len(q.retryPolicy) {
 		//Retries exhausted, dead letter
-		q.deadLetterMessage(msg)
+		q.deadLetterMessage(msg) //Add this as a middleware instead
 		return nil
 	}
 
@@ -214,7 +178,7 @@ func (q *queue) pollMessages() {
 					Body:            Body(aws.StringValue(message.Body)),
 					originalMessage: *message,
 				},
-				acted: false,
+				state: Unhandled,
 				q:     q,
 			}
 

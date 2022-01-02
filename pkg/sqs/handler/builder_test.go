@@ -9,10 +9,10 @@ import (
 
 type mockReceiver struct{}
 
-func (m mockReceiver) DeadLetter() error        { return nil }
-func (m mockReceiver) Retry() error             { return nil }
-func (m mockReceiver) Handled() error           { return nil }
-func (m mockReceiver) GetResult() HandlerResult { return Handled }
+func (m mockReceiver) DeadLetter() error           { return nil }
+func (m mockReceiver) Retry() error                { return nil }
+func (m mockReceiver) Handled() error              { return nil }
+func (m mockReceiver) GetResult() sqs.MessageState { return sqs.Handled }
 
 func TestWithHandler(t *testing.T) {
 	// arrange
@@ -36,30 +36,6 @@ func TestWithHandler(t *testing.T) {
 
 	assert.True(t, invoked)
 }
-
-// func TestWithDeadLetterQueue(t *testing.T) {
-// 	// arrange
-// 	builder := HandlerQueueConfiguration{}
-
-// 	// act
-// 	builder.WithDeadLetterQueue("test-dl")
-
-// 	// assert
-// 	assert.Equal(t, "test-dl", builder.deadLetterQueue)
-// }
-
-// func TestWithRetryPolicy(t *testing.T) {
-// 	// arrange
-// 	builder := HandlerQueueConfiguration{}
-
-// 	retries := []time.Duration{time.Hour, time.Second, time.Minute}
-
-// 	// act
-// 	builder.WithRetryPolicy(retries...)
-
-// 	// assert
-// 	assert.Equal(t, retries, builder.retryConfig)
-// }
 
 type mockHandler struct{}
 

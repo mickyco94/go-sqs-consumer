@@ -30,6 +30,7 @@ type ResponseReceiver interface {
 	DeadLetter() error
 	Retry() error
 	Handled() error
+	GetResult() MessageState
 }
 
 type Body string
@@ -61,3 +62,17 @@ type SqsConsumer struct {
 }
 
 type receiptHandle *string
+
+// MessageState is an enum that indicates the action to take upon completion
+type MessageState int
+
+const (
+	//Unhandled indicates the message has yet to be processed by the event pipeline
+	Unhandled = 0
+	//Handled indicates the message has been successfuly handled and will therefore be deleted from the queue
+	Handled = 1
+	//Retry will prompt the message to be re-enqueued with the specified delay
+	Retry = 2
+	//DeadLetter will send the message to the configured dead-letter queue
+	DeadLetter = 3
+)

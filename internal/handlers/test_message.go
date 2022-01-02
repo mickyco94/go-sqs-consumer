@@ -36,7 +36,7 @@ func (h *TestMessageHandler) Handle(w sqs.ResponseReceiver, r sqs.Request) {
 	}
 
 	if msg.Foo == "retry" {
-		w.DeadLetter()
+		w.Retry()
 	}
 
 	w.Handled()

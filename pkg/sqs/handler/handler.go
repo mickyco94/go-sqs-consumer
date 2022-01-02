@@ -29,7 +29,7 @@ func New(c sqs.Consumer, cfg func(handlerCfg *HandlerQueueConfiguration)) error 
 			if handler == nil {
 				m.Receiver.DeadLetter()
 			}
-			handler.Handle(m.Receiver, m.MessageRequest)
+			go handler.Handle(m.Receiver, m.MessageRequest)
 		}
 	}()
 
@@ -45,17 +45,3 @@ func (f HandlerFunc) Handle(w sqs.ResponseReceiver, r sqs.Request) {
 type Handler interface {
 	Handle(sqs.ResponseReceiver, sqs.Request)
 }
-
-// HandlerResult is an enum that indicates the action to take upon completion
-type HandlerResult int
-
-const (
-	//Unhandled indicates the message has yet to be processed by the event pipeline
-	Unhandled = 0
-	//Handled indicates the message has been successfuly handled and will therefore be deleted from the queue
-	Handled = 1
-	//Retry will prompt the message to be re-enqueued with the specified delay
-	Retry = 2
-	//DeadLetter will send the message to the configured dead-letter queue
-	DeadLetter = 3
-)
