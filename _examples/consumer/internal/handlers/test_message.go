@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
+	sqs "github.com/micky-clerkin-oliver-cko/go-sqs-consumer"
 	"github.com/sirupsen/logrus"
 )
 

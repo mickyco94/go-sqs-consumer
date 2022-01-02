@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
-	awssqs "github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
 //Move to using channels that return Request struct
@@ -25,11 +25,11 @@ type queue struct {
 	deadLetterQueueUrl  string
 	retryPolicy         []time.Duration
 	resultChannel       chan *Result
-	client              awssqs.SQS
+	client              sqs.SQS
 }
 
 func (q *queue) deleteMessage(rh receiptHandle) error {
-	_, err := q.client.DeleteMessage(&awssqs.DeleteMessageInput{
+	_, err := q.client.DeleteMessage(&sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.url),
 		ReceiptHandle: rh,
 	})
@@ -63,7 +63,7 @@ func (q *queue) listenForMessages() (chan *Result, error) {
 	return q.resultChannel, nil
 }
 
-func (q *queue) retry(msg *awssqs.Message) error {
+func (q *queue) retry(msg *sqs.Message) error {
 	attemptNumber := 0
 
 	currentAttemptAttribute := msg.MessageAttributes["RetryCount"]
@@ -84,14 +84,14 @@ func (q *queue) retry(msg *awssqs.Message) error {
 		return nil
 	}
 
-	msg.MessageAttributes["RetryCount"] = &awssqs.MessageAttributeValue{
+	msg.MessageAttributes["RetryCount"] = &sqs.MessageAttributeValue{
 		StringValue: aws.String(fmt.Sprintf("%d", attemptNumber)),
 		DataType:    aws.String("string"),
 	}
 
 	delay := q.retryPolicy[attemptNumber-1]
 
-	q.client.SendMessage(&awssqs.SendMessageInput{
+	q.client.SendMessage(&sqs.SendMessageInput{
 		DelaySeconds:      aws.Int64(int64(delay.Seconds())),
 		MessageAttributes: msg.MessageAttributes,
 		MessageBody:       msg.Body,
@@ -101,8 +101,8 @@ func (q *queue) retry(msg *awssqs.Message) error {
 	return nil
 }
 
-func (q *queue) deadLetterMessage(msg *awssqs.Message) error {
-	_, err := q.client.SendMessage(&awssqs.SendMessageInput{
+func (q *queue) deadLetterMessage(msg *sqs.Message) error {
+	_, err := q.client.SendMessage(&sqs.SendMessageInput{
 		MessageBody:       msg.Body,
 		MessageAttributes: msg.MessageAttributes,
 		QueueUrl:          &q.deadLetterQueueUrl,
@@ -123,8 +123,8 @@ type Result struct {
 	MessageRequest Request
 }
 
-func getQueueUrl(s awssqs.SQS, queueName string) (string, error) {
-	res, err := s.GetQueueUrl(&awssqs.GetQueueUrlInput{
+func getQueueUrl(s sqs.SQS, queueName string) (string, error) {
+	res, err := s.GetQueueUrl(&sqs.GetQueueUrlInput{
 		QueueName: aws.String(queueName),
 	})
 
@@ -141,7 +141,7 @@ func (q *queue) pollMessages() {
 
 		res := &Result{}
 
-		messages, err := q.client.ReceiveMessage(&awssqs.ReceiveMessageInput{
+		messages, err := q.client.ReceiveMessage(&sqs.ReceiveMessageInput{
 			QueueUrl:              aws.String(q.url),
 			WaitTimeSeconds:       aws.Int64(15),
 			MessageAttributeNames: []*string{aws.String("All")},

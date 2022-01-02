@@ -3,7 +3,7 @@ package sqs
 import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
-	awssqs "github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
 func New(cfg aws.Config) *SqsConsumer {
@@ -13,7 +13,7 @@ func New(cfg aws.Config) *SqsConsumer {
 	}))
 
 	s := &SqsConsumer{
-		sqs:    awssqs.New(sess),
+		sqs:    sqs.New(sess),
 		queues: make([]*queue, 0),
 	}
 

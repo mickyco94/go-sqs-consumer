@@ -1,21 +1,10 @@
 version: "3.5"
 
 services:
-    go-sqs-consumer:
-        image: go-sqs-consumer
-        container_name: go-sqs-consumer
-        restart: always
-        build:
-            context: .
-        environment:
-            - FOO=BAR
-        ports:
-            - "8080:8080"
-
     localstack:
         container_name: go-sqs-consumer-localstack
         build:
-            context: ./docker-setup/localstack
+            context: ./localstack
             dockerfile: Dockerfile
         environment:
             - SERVICES=sqs

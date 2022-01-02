@@ -1,6 +1,6 @@
 package handler
 
-import "github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
+import sqs "github.com/micky-clerkin-oliver-cko/go-sqs-consumer"
 
 // Chain returns a Middlewares type from a slice of middleware handlers.
 func Chain(middlewares ...func(Handler) Handler) Middlewares {

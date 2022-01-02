@@ -8,10 +8,10 @@ import (
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/internal/handlers"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/handler"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/handler/pipeline"
+	sqs "github.com/micky-clerkin-oliver-cko/go-sqs-consumer"
+	"github.com/micky-clerkin-oliver-cko/go-sqs-consumer/examples/consumer/internal/handlers"
+	"github.com/micky-clerkin-oliver-cko/go-sqs-consumer/handler"
+	"github.com/micky-clerkin-oliver-cko/go-sqs-consumer/pipeline"
 	log "github.com/sirupsen/logrus"
 )
 

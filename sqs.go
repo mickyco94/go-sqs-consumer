@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	awssqs "github.com/aws/aws-sdk-go/service/sqs"
+	"github.com/aws/aws-sdk-go/service/sqs"
 )
 
 // Features to add:
@@ -42,7 +42,7 @@ type Request struct {
 	Attempt         int
 	MaxAttempts     int
 	Body            Body
-	originalMessage awssqs.Message
+	originalMessage sqs.Message
 }
 
 type Consumer interface {
@@ -58,7 +58,7 @@ type QueueConfiguration struct {
 
 type SqsConsumer struct {
 	queues []*queue
-	sqs    *awssqs.SQS
+	sqs    *sqs.SQS
 }
 
 type receiptHandle *string

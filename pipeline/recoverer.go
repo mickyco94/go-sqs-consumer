@@ -1,8 +1,8 @@
 package pipeline
 
 import (
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
-	"github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs/handler"
+	sqs "github.com/micky-clerkin-oliver-cko/go-sqs-consumer"
+	"github.com/micky-clerkin-oliver-cko/go-sqs-consumer/handler"
 )
 
 func Recoverer() func(next handler.Handler) handler.Handler {

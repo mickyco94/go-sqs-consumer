@@ -1,6 +1,6 @@
 package handler
 
-import "github.com/micky-clerkinoliver-cko/go-sqs-consumer/pkg/sqs"
+import sqs "github.com/micky-clerkin-oliver-cko/go-sqs-consumer"
 
 //Split into configure and run
 func New(c sqs.Consumer, cfg func(handlerCfg *HandlerQueueConfiguration)) error {
